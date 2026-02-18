@@ -5,6 +5,10 @@ description = "CU MCP Server"
 requires-python = ">=3.10"
 dependencies = [
     "mcp[cli]>=1.2.0",
+    "pyautogui>=0.9.54",
+    "mss>=9.0.0",
+    "pillow>=10.0.0",
+    "pyperclip>=1.8.0",
 ]
 
 [build-system]
