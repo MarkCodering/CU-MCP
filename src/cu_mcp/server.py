@@ -22,21 +22,32 @@ import os
 import subprocess
 
 import mss
-import pyautogui
 import pyperclip
 from mcp.server.fastmcp import FastMCP, Image
 from PIL import Image as PILImage
+
+# ---------------------------------------------------------------------------
+# Lazy pyautogui import – avoids X11 init errors at module load time
+# ---------------------------------------------------------------------------
+
+_pyautogui = None
+
+
+def _get_pyautogui():
+    global _pyautogui
+    if _pyautogui is None:
+        import pyautogui as _pag
+        _pag.FAILSAFE = True
+        _pag.PAUSE = 0.05
+        _pyautogui = _pag
+    return _pyautogui
+
 
 # ---------------------------------------------------------------------------
 # Server setup
 # ---------------------------------------------------------------------------
 
 mcp = FastMCP("cu-mcp")
-
-# Safety: abort if the mouse is moved to a screen corner.
-pyautogui.FAILSAFE = True
-# Short pause between pyautogui calls so the OS can keep up.
-pyautogui.PAUSE = 0.05
 
 _DEFAULT_MAX_SCREENSHOT_EDGE = 1920
 _DEFAULT_PNG_COMPRESS_LEVEL = 6
@@ -134,7 +145,7 @@ def _screenshot_b64(screen_size: tuple[int, int] | None = None) -> tuple[str, in
 
 
 def _screen_size() -> tuple[int, int]:
-    return pyautogui.size()
+    return _get_pyautogui().size()
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +197,7 @@ def get_screen_info() -> dict:
     """
     try:
         w, h = _screen_size()
-        cx, cy = pyautogui.position()
+        cx, cy = _get_pyautogui().position()
         return {
             "success": True,
             "screen_width": w,
@@ -204,7 +215,7 @@ def get_cursor_position() -> dict:
     Return the current (x, y) pixel position of the mouse cursor.
     """
     try:
-        x, y = pyautogui.position()
+        x, y = _get_pyautogui().position()
         return {"success": True, "x": x, "y": y}
     except Exception as exc:
         return {"success": False, "error": str(exc)}
@@ -265,8 +276,8 @@ def mouse_move(x: int, y: int, duration: float = 0.25) -> dict:
         duration: Smooth animation time in seconds (default 0.25).
     """
     try:
-        pyautogui.moveTo(x, y, duration=duration)
-        ax, ay = pyautogui.position()
+        _get_pyautogui().moveTo(x, y, duration=duration)
+        ax, ay = _get_pyautogui().position()
         return {"success": True, "x": ax, "y": ay}
     except Exception as exc:
         return {"success": False, "error": str(exc)}
@@ -283,7 +294,7 @@ def mouse_left_click(x: int, y: int, duration: float = 0.2) -> dict:
         duration: Mouse movement animation time in seconds (default 0.2).
     """
     try:
-        pyautogui.click(x, y, button="left", duration=duration)
+        _get_pyautogui().click(x, y, button="left", duration=duration)
         return {"success": True, "action": "left_click", "x": x, "y": y}
     except Exception as exc:
         return {"success": False, "error": str(exc)}
@@ -300,7 +311,7 @@ def mouse_right_click(x: int, y: int, duration: float = 0.2) -> dict:
         duration: Mouse movement animation time in seconds (default 0.2).
     """
     try:
-        pyautogui.click(x, y, button="right", duration=duration)
+        _get_pyautogui().click(x, y, button="right", duration=duration)
         return {"success": True, "action": "right_click", "x": x, "y": y}
     except Exception as exc:
         return {"success": False, "error": str(exc)}
@@ -317,7 +328,7 @@ def mouse_double_click(x: int, y: int, duration: float = 0.2) -> dict:
         duration: Mouse movement animation time in seconds (default 0.2).
     """
     try:
-        pyautogui.doubleClick(x, y, duration=duration)
+        _get_pyautogui().doubleClick(x, y, duration=duration)
         return {"success": True, "action": "double_click", "x": x, "y": y}
     except Exception as exc:
         return {"success": False, "error": str(exc)}
@@ -339,11 +350,11 @@ def mouse_scroll(x: int, y: int, scroll_y: int = 3, scroll_x: int = 0) -> dict:
                   Positive = scroll RIGHT, negative = scroll LEFT. Default: 0.
     """
     try:
-        pyautogui.moveTo(x, y, duration=0.15)
+        _get_pyautogui().moveTo(x, y, duration=0.15)
         if scroll_y != 0:
-            pyautogui.scroll(scroll_y, x=x, y=y)
+            _get_pyautogui().scroll(scroll_y, x=x, y=y)
         if scroll_x != 0:
-            pyautogui.hscroll(scroll_x, x=x, y=y)
+            _get_pyautogui().hscroll(scroll_x, x=x, y=y)
         return {
             "success": True,
             "action": "scroll",
@@ -379,8 +390,8 @@ def mouse_drag(
         button: Mouse button to hold during drag – "left" (default) or "right".
     """
     try:
-        pyautogui.moveTo(start_x, start_y, duration=0.2)
-        pyautogui.dragTo(end_x, end_y, duration=duration, button=button)
+        _get_pyautogui().moveTo(start_x, start_y, duration=0.2)
+        _get_pyautogui().dragTo(end_x, end_y, duration=duration, button=button)
         return {
             "success": True,
             "action": "drag",
@@ -416,7 +427,7 @@ def keyboard_type(text: str, use_clipboard: bool = True) -> dict:
         if use_clipboard:
             previous = pyperclip.paste()
             pyperclip.copy(text)
-            pyautogui.hotkey("cmd", "v")  # macOS paste
+            _get_pyautogui().hotkey("cmd", "v")  # macOS paste
             # Restore clipboard after a brief delay (best-effort)
             import threading
             def _restore():
@@ -425,7 +436,7 @@ def keyboard_type(text: str, use_clipboard: bool = True) -> dict:
                 except Exception: pass
             threading.Thread(target=_restore, daemon=True).start()
         else:
-            pyautogui.typewrite(text, interval=0.03)
+            _get_pyautogui().typewrite(text, interval=0.03)
         return {"success": True, "action": "type", "text": text}
     except Exception as exc:
         return {"success": False, "error": str(exc)}
@@ -448,7 +459,7 @@ def keyboard_press(key: str) -> dict:
         key: The key name string (case-insensitive).
     """
     try:
-        pyautogui.press(key)
+        _get_pyautogui().press(key)
         return {"success": True, "action": "press", "key": key}
     except Exception as exc:
         return {"success": False, "error": str(exc)}
@@ -474,7 +485,7 @@ def keyboard_hotkey(keys: list[str]) -> dict:
         keys: Ordered list of key names to press together.
     """
     try:
-        pyautogui.hotkey(*keys)
+        _get_pyautogui().hotkey(*keys)
         return {"success": True, "action": "hotkey", "keys": keys}
     except Exception as exc:
         return {"success": False, "error": str(exc)}
@@ -492,7 +503,7 @@ def keyboard_key_down(key: str) -> dict:
         key: Key name to hold (e.g., 'shift', 'ctrl', 'cmd').
     """
     try:
-        pyautogui.keyDown(key)
+        _get_pyautogui().keyDown(key)
         return {"success": True, "action": "key_down", "key": key}
     except Exception as exc:
         return {"success": False, "error": str(exc)}
@@ -507,7 +518,7 @@ def keyboard_key_up(key: str) -> dict:
         key: Key name to release (e.g., 'shift', 'ctrl', 'cmd').
     """
     try:
-        pyautogui.keyUp(key)
+        _get_pyautogui().keyUp(key)
         return {"success": True, "action": "key_up", "key": key}
     except Exception as exc:
         return {"success": False, "error": str(exc)}
@@ -566,7 +577,7 @@ def screenshot_resource() -> str:
 def screen_info_resource() -> str:
     """JSON with screen dimensions and current cursor position."""
     w, h = _screen_size()
-    cx, cy = pyautogui.position()
+    cx, cy = _get_pyautogui().position()
     return json.dumps(
         {"screen_width": w, "screen_height": h, "cursor_x": cx, "cursor_y": cy}
     )
