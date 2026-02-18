@@ -1,0 +1,15 @@
+[project]
+name = "cu-mcp"
+version = "0.1.0"
+description = "CU MCP Server"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp[cli]>=1.2.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+cu-mcp = "cu_mcp.server:main"
