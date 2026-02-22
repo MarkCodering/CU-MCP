@@ -104,6 +104,15 @@ The first time the server performs mouse/keyboard actions or takes a screenshot,
 mcp dev src/cu_mcp/server.py
 ```
 
+### Terminal execution logs
+
+The server now prints live tool execution logs (start/end with timing and sanitized arguments/results) to the terminal via `stderr` while it runs. This does not interfere with MCP `stdio` responses.
+
+Optional environment variables:
+
+- `CU_MCP_LOG_TO_STDERR` (default `1`): set to `0` to disable terminal logs
+- `CU_MCP_LOG_MAX_STRING` (default `300`): max logged string length before truncation
+
 ## Adding to Claude Code
 
 ```bash

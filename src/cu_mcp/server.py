@@ -16,10 +16,14 @@ System Preferences → Privacy & Security → Accessibility / Screen Recording.
 from __future__ import annotations
 
 import base64
+import functools
 import io
+import inspect
 import json
 import os
 import subprocess
+import sys
+import time
 
 import mss
 import pyperclip
@@ -71,11 +75,105 @@ _MAX_SCREENSHOT_EDGE = _int_env(
 _PNG_COMPRESS_LEVEL = _int_env(
     "CU_MCP_SCREENSHOT_PNG_COMPRESS_LEVEL", _DEFAULT_PNG_COMPRESS_LEVEL, 0, 9
 )
+_LOG_ENABLED = os.getenv("CU_MCP_LOG_TO_STDERR", "1").lower() not in {"0", "false", "no"}
+_LOG_MAX_STRING = _int_env("CU_MCP_LOG_MAX_STRING", 300, 32, 10000)
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _truncate_string(value: str, limit: int = _LOG_MAX_STRING) -> str:
+    if len(value) <= limit:
+        return value
+    return f"{value[:limit]}...<truncated {len(value) - limit} chars>"
+
+
+def _safe_log_value(value, *, depth: int = 0):
+    if depth > 3:
+        return "<max-depth>"
+
+    if isinstance(value, str):
+        return _truncate_string(value)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, bytes):
+        return f"<bytes {len(value)}>"
+    if isinstance(value, Image):
+        size = len(value.data) if getattr(value, "data", None) else 0
+        return {"type": "Image", "format": getattr(value, "format", None), "bytes": size}
+    if isinstance(value, (list, tuple)):
+        items = [_safe_log_value(v, depth=depth + 1) for v in value[:10]]
+        if len(value) > 10:
+            items.append(f"...<{len(value) - 10} more>")
+        return items if isinstance(value, list) else tuple(items)
+    if isinstance(value, dict):
+        out = {}
+        for idx, (k, v) in enumerate(value.items()):
+            if idx >= 20:
+                out["..."] = f"<{len(value) - 20} more keys>"
+                break
+            out[str(k)] = _safe_log_value(v, depth=depth + 1)
+        return out
+    return repr(value)
+
+
+def _log_terminal(event: str, tool_name: str, **fields) -> None:
+    if not _LOG_ENABLED:
+        return
+    payload = {
+        "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "event": event,
+        "tool": tool_name,
+        **fields,
+    }
+    try:
+        line = json.dumps(payload, ensure_ascii=True, default=repr)
+    except Exception:
+        line = str(payload)
+    sys.stderr.write(f"[cu-mcp] {line}\n")
+    sys.stderr.flush()
+
+
+def _logged_tool(fn):
+    sig = inspect.signature(fn)
+    tool_name = fn.__name__
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            bound = sig.bind_partial(*args, **kwargs)
+            call_args = {
+                name: _safe_log_value(value) for name, value in bound.arguments.items()
+            }
+        except Exception:
+            call_args = {"args": _safe_log_value(list(args)), "kwargs": _safe_log_value(kwargs)}
+
+        started = time.perf_counter()
+        _log_terminal("start", tool_name, args=call_args)
+        try:
+            result = fn(*args, **kwargs)
+        except Exception as exc:
+            elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+            _log_terminal(
+                "error",
+                tool_name,
+                elapsed_ms=elapsed_ms,
+                error=str(exc),
+            )
+            raise
+
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+        _log_terminal(
+            "end",
+            tool_name,
+            elapsed_ms=elapsed_ms,
+            result=_safe_log_value(result),
+        )
+        return result
+
+    return wrapper
 
 
 def _normalize_to_logical_size(
@@ -154,6 +252,7 @@ def _screen_size() -> tuple[int, int]:
 
 
 @mcp.tool()
+@_logged_tool
 def take_screenshot() -> list:
     """
     Capture the current screen and return it as a base64-encoded PNG image.
@@ -187,6 +286,7 @@ def take_screenshot() -> list:
 
 
 @mcp.tool()
+@_logged_tool
 def get_screen_info() -> dict:
     """
     Return basic information about the screen: dimensions and current cursor position.
@@ -210,6 +310,7 @@ def get_screen_info() -> dict:
 
 
 @mcp.tool()
+@_logged_tool
 def get_cursor_position() -> dict:
     """
     Return the current (x, y) pixel position of the mouse cursor.
@@ -222,6 +323,7 @@ def get_cursor_position() -> dict:
 
 
 @mcp.tool()
+@_logged_tool
 def get_active_window_info() -> dict:
     """
     Return the name and title of the currently focused window (macOS).
@@ -266,6 +368,7 @@ def get_active_window_info() -> dict:
 
 
 @mcp.tool()
+@_logged_tool
 def mouse_move(x: int, y: int, duration: float = 0.25) -> dict:
     """
     Move the mouse cursor to screen coordinates (x, y) without clicking.
@@ -284,6 +387,7 @@ def mouse_move(x: int, y: int, duration: float = 0.25) -> dict:
 
 
 @mcp.tool()
+@_logged_tool
 def mouse_left_click(x: int, y: int, duration: float = 0.2) -> dict:
     """
     Move the mouse to (x, y) and perform a left (primary) click.
@@ -301,6 +405,7 @@ def mouse_left_click(x: int, y: int, duration: float = 0.2) -> dict:
 
 
 @mcp.tool()
+@_logged_tool
 def mouse_right_click(x: int, y: int, duration: float = 0.2) -> dict:
     """
     Move the mouse to (x, y) and perform a right (secondary / context-menu) click.
@@ -318,6 +423,7 @@ def mouse_right_click(x: int, y: int, duration: float = 0.2) -> dict:
 
 
 @mcp.tool()
+@_logged_tool
 def mouse_double_click(x: int, y: int, duration: float = 0.2) -> dict:
     """
     Move the mouse to (x, y) and perform a double left-click.
@@ -335,6 +441,7 @@ def mouse_double_click(x: int, y: int, duration: float = 0.2) -> dict:
 
 
 @mcp.tool()
+@_logged_tool
 def mouse_scroll(x: int, y: int, scroll_y: int = 3, scroll_x: int = 0) -> dict:
     """
     Scroll at screen coordinates (x, y).
@@ -368,6 +475,7 @@ def mouse_scroll(x: int, y: int, scroll_y: int = 3, scroll_x: int = 0) -> dict:
 
 
 @mcp.tool()
+@_logged_tool
 def mouse_drag(
     start_x: int,
     start_y: int,
@@ -409,6 +517,7 @@ def mouse_drag(
 
 
 @mcp.tool()
+@_logged_tool
 def keyboard_type(text: str, use_clipboard: bool = True) -> dict:
     """
     Type the given text at the current cursor position.
@@ -443,6 +552,7 @@ def keyboard_type(text: str, use_clipboard: bool = True) -> dict:
 
 
 @mcp.tool()
+@_logged_tool
 def keyboard_press(key: str) -> dict:
     """
     Press and release a single keyboard key.
@@ -466,6 +576,7 @@ def keyboard_press(key: str) -> dict:
 
 
 @mcp.tool()
+@_logged_tool
 def keyboard_hotkey(keys: list[str]) -> dict:
     """
     Press a keyboard shortcut (multiple keys held simultaneously).
@@ -492,6 +603,7 @@ def keyboard_hotkey(keys: list[str]) -> dict:
 
 
 @mcp.tool()
+@_logged_tool
 def keyboard_key_down(key: str) -> dict:
     """
     Hold a keyboard key down without releasing it.
@@ -510,6 +622,7 @@ def keyboard_key_down(key: str) -> dict:
 
 
 @mcp.tool()
+@_logged_tool
 def keyboard_key_up(key: str) -> dict:
     """
     Release a previously held keyboard key.
@@ -530,6 +643,7 @@ def keyboard_key_up(key: str) -> dict:
 
 
 @mcp.tool()
+@_logged_tool
 def run_shell_command(command: str, timeout: int = 30) -> dict:
     """
     Execute a shell command and return its stdout, stderr, and return code.
